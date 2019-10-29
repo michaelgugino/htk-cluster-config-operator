@@ -15,6 +15,8 @@ import (
 	"github.com/michaelgugino/htk-cluster-config-operator/pkg/controller"
 	"github.com/michaelgugino/htk-cluster-config-operator/version"
 
+	oapiconfig "github.com/openshift/api/config"
+
 	"github.com/operator-framework/operator-sdk/pkg/k8sutil"
 	kubemetrics "github.com/operator-framework/operator-sdk/pkg/kube-metrics"
 	"github.com/operator-framework/operator-sdk/pkg/leader"
@@ -104,6 +106,12 @@ func main() {
 	log.Info("Registering Components.")
 
 	// Setup Scheme for all resources
+
+	if err := oapiconfig.Install(mgr.GetScheme()); err != nil {
+		log.Error(err, "")
+		os.Exit(1)
+	}
+
 	if err := apis.AddToScheme(mgr.GetScheme()); err != nil {
 		log.Error(err, "")
 		os.Exit(1)
