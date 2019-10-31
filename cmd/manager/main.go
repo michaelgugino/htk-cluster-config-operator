@@ -12,7 +12,8 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/michaelgugino/htk-cluster-config-operator/pkg/apis"
-	"github.com/michaelgugino/htk-cluster-config-operator/pkg/controller"
+	"github.com/michaelgugino/htk-cluster-config-operator/pkg/util"
+	"github.com/michaelgugino/htk-cluster-config-operator/pkg/controller/image"
 	"github.com/michaelgugino/htk-cluster-config-operator/version"
 
 	oapiconfig "github.com/openshift/api/config"
@@ -21,16 +22,19 @@ import (
 	kubemetrics "github.com/operator-framework/operator-sdk/pkg/kube-metrics"
 	"github.com/operator-framework/operator-sdk/pkg/leader"
 	"github.com/operator-framework/operator-sdk/pkg/log/zap"
-	"github.com/operator-framework/operator-sdk/pkg/metrics"
+	//"github.com/operator-framework/operator-sdk/pkg/metrics"
 	"github.com/operator-framework/operator-sdk/pkg/restmapper"
 	sdkVersion "github.com/operator-framework/operator-sdk/version"
 	"github.com/spf13/pflag"
-	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
+	//v1 "k8s.io/api/core/v1"
+	//"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	//kubecontrolplanev1 "github.com/openshift/api/kubecontrolplane"
 )
 
 // Change below variables to serve metrics on different host or port.
@@ -77,8 +81,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Get a config to talk to the apiserver
-	cfg, err := config.GetConfig()
+	// Get a config to talk to the local apiserver
+	localCfg, err := config.GetConfig()
+	if err != nil {
+		log.Error(err, "")
+		os.Exit(1)
+	}
+
+	localClientOpts := client.Options{}
+	localClient, err := client.New(localCfg, localClientOpts)
 	if err != nil {
 		log.Error(err, "")
 		os.Exit(1)
@@ -92,11 +103,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	remoteCfg, err := util.RestConfigFromSecret(localClient, namespace)
+
+	if err != nil {
+		log.Error(err, "")
+		os.Exit(1)
+	}
 	// Create a new Cmd to provide shared dependencies and start components
-	mgr, err := manager.New(cfg, manager.Options{
+	mgr, err := manager.New(remoteCfg, manager.Options{
 		Namespace:          namespace,
 		MapperProvider:     restmapper.NewDynamicRESTMapper,
-		MetricsBindAddress: fmt.Sprintf("%s:%d", metricsHost, metricsPort),
+		// MetricsBindAddress: fmt.Sprintf("%s:%d", metricsHost, metricsPort),
 	})
 	if err != nil {
 		log.Error(err, "")
@@ -112,17 +129,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	/*
+	if err := kubecontrolplanev1.Install(mgr.GetScheme()); err != nil {
+		log.Error(err, "")
+		os.Exit(1)
+	}
+	*/
+
+
 	if err := apis.AddToScheme(mgr.GetScheme()); err != nil {
 		log.Error(err, "")
 		os.Exit(1)
 	}
 
 	// Setup all Controllers
+	/*
 	if err := controller.AddToManager(mgr); err != nil {
 		log.Error(err, "")
 		os.Exit(1)
 	}
+	*/
+	// Setup Image Controller
 
+	if err := image.Add(mgr, localClient, namespace); err != nil {
+		log.Error(err, "")
+		os.Exit(1)
+	}
+
+	/*
 	if err = serveCRMetrics(cfg); err != nil {
 		log.Info("Could not generate and serve custom resource metrics", "error", err.Error())
 	}
@@ -150,6 +184,7 @@ func main() {
 			log.Info("Install prometheus-operator in your cluster to create ServiceMonitor objects", "error", err.Error())
 		}
 	}
+	*/
 
 	log.Info("Starting the Cmd.")
 
