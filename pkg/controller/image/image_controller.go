@@ -2,9 +2,10 @@ package image
 
 import (
 	"context"
-	"encoding/json"
+	//"encoding/json"
 	"fmt"
-	"github.com/ghodss/yaml"
+	"reflect"
+	//"github.com/ghodss/yaml"
 	//"github.com/michaelgugino/htk-cluster-config-operator/pkg/controller"
 	//"github.com/michaelgugino/htk-cluster-config-operator/pkg/util"
 	configv1 "github.com/openshift/api/config/v1"
@@ -22,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
+	//"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	kubecontrolplanev1 "github.com/openshift/api/kubecontrolplane/v1"
 )
@@ -116,45 +118,47 @@ func (r *ReconcileImage) Reconcile(request reconcile.Request) (reconcile.Result,
 		return reconcile.Result{}, err
 	}
 
-	// Fetch the Image instance
-	configImage2 := &configv1.Image{}
-	err = r.mgmtClient.Get(context.TODO(), request.NamespacedName, configImage2)
-	if err != nil {
-		if errors.IsNotFound(err) {
-			// Request object not found, could have been deleted after reconcile request.
-			// Return and don't requeue
-			return reconcile.Result{}, nil
-		}
-		// Error reading the object - requeue the request.
-		return reconcile.Result{}, err
-	}
-	_, err = r.kubeCPconfigFromSecret()
-	//reqLogger.Info("Reconciling Image %v", kcp)
-	/*
-	internalRegistryHostName := configImage.Status.InternalRegistryHostname
-	if len(internalRegistryHostName) > 0 {
-		if err := unstructured.SetNestedField(observedConfig, internalRegistryHostName, internalRegistryHostnamePath...); err != nil {
-			errs = append(errs, err)
-		}
-		if internalRegistryHostName != currentInternalRegistryHostname {
-			recorder.Eventf("ObserveInternalRegistryHostnameChanged", "Internal registry hostname changed to %q", internalRegistryHostName)
-		}
-	}
-	*/
-	return reconcile.Result{}, nil
-}
-
-func (r *ReconcileImage) kubeCPconfigFromSecret() (kubecontrolplanev1.KubeAPIServerConfig, error) {
-	decoded := kubecontrolplanev1.KubeAPIServerConfig{}
-	secret := &corev1.Secret{}
+	kcpSecret := corev1.Secret{}
 	secretKey := client.ObjectKey{
 		Namespace: r.mgmtNamespace,
 		Name:      "hosted-kubecontrolplane",
 	}
 
-	if err := r.client.Get(context.TODO(), secretKey, secret); err != nil {
-		return decoded, err
+	if err := r.mgmtClient.Get(context.TODO(), secretKey, &kcpSecret); err != nil {
+		// Error reading the object - requeue the request.
+		return reconcile.Result{}, err
 	}
+
+	kcp, err := r.kubeCPconfigFromSecret(kcpSecret)
+
+	//kcpNew := *(kcp.DeepCopy())
+	kcpNew := kubecontrolplanev1.KubeAPIServerConfig{}
+	kcp.DeepCopyInto(&kcpNew)
+
+
+	// internalRegistryHostnamePath := []string{"imagePolicyConfig", "internalRegistryHostname"}
+	internalRegistryHostName := configImage.Status.InternalRegistryHostname
+	// This should probably never be zero-length.
+	if len(internalRegistryHostName) > 0 {
+		kcpNew.ImagePolicyConfig.InternalRegistryHostname = internalRegistryHostName
+	}
+	externalRegistryHostnames := configImage.Spec.ExternalRegistryHostnames
+	externalRegistryHostnames = append(externalRegistryHostnames, configImage.Status.ExternalRegistryHostnames...)
+
+	kcpNew.ImagePolicyConfig.ExternalRegistryHostnames = externalRegistryHostnames
+
+	//allowed := configImage.Spec.AllowedRegistriesForImport
+	// kcpNew.ImagePolicyConfig.AllowedRegistriesForImport = allowed
+
+	fmt.Println("kcp: ", kcp)
+	fmt.Println("kcpNew: ", kcpNew)
+	fmt.Println("updated kcp:", reflect.DeepEqual(kcpNew, kcp))
+
+	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontrolplanev1.KubeAPIServerConfig, error) {
+	decoded := kubecontrolplanev1.KubeAPIServerConfig{}
 
 	encoded, ok := secret.Data["kubecontrolplane"]
 	if !ok {
@@ -166,9 +170,8 @@ func (r *ReconcileImage) kubeCPconfigFromSecret() (kubecontrolplanev1.KubeAPISer
 		fmt.Println("error decoding")
 		return decoded, err
 	}
-	fmt.Println("Decoded: ", decoded)
-	fmt.Println("trying: ", decoded.ImagePolicyConfig)
 
+	/*
 	configJson, err := yaml.YAMLToJSON(encoded)
 	if err != nil {
 		fmt.Println("error yaml to json")
@@ -181,7 +184,7 @@ func (r *ReconcileImage) kubeCPconfigFromSecret() (kubecontrolplanev1.KubeAPISer
 		return decoded, err
 	}
 	fmt.Println("json umarshal: ", cfg)
-	/*
+
 	err := json.Unmarshal(kubecontrolplane, &decoded)
     if err != nil {
         fmt.Println("error:", err)

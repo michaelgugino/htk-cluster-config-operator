@@ -3,7 +3,6 @@ module github.com/michaelgugino/htk-cluster-config-operator
 go 1.13
 
 require (
-	github.com/ghodss/yaml v1.0.1-0.20180820084758-c7ce16629ff4
 	github.com/go-logfmt/logfmt v0.4.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0-rc1 // indirect
 	github.com/openshift/api v3.9.1-0.20190424152011-77b8897ec79a+incompatible
