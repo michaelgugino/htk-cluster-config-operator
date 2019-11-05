@@ -5,7 +5,7 @@ import (
 	//"encoding/json"
 	"fmt"
 	"reflect"
-	//"github.com/ghodss/yaml"
+	"github.com/ghodss/yaml"
 	//"github.com/michaelgugino/htk-cluster-config-operator/pkg/controller"
 	//"github.com/michaelgugino/htk-cluster-config-operator/pkg/util"
 	configv1 "github.com/openshift/api/config/v1"
@@ -46,7 +46,7 @@ func newReconciler(mgr manager.Manager, mgmtClient client.Client, mgmtNamespace 
 		scheme: scheme,
 		mgmtClient: mgmtClient,
 		mgmtNamespace: mgmtNamespace,
-		deserializer: codecs.UniversalDeserializer(),
+		deserializer: codecs.UniversalDecoder(kubecontrolplanev1.SchemeGroupVersion),
 	}
 }
 
@@ -131,9 +131,9 @@ func (r *ReconcileImage) Reconcile(request reconcile.Request) (reconcile.Result,
 
 	kcp, err := r.kubeCPconfigFromSecret(kcpSecret)
 
-	//kcpNew := *(kcp.DeepCopy())
-	kcpNew := kubecontrolplanev1.KubeAPIServerConfig{}
-	kcp.DeepCopyInto(&kcpNew)
+	kcpNew := kcp.DeepCopy()
+	//kcpNew := &kubecontrolplanev1.KubeAPIServerConfig{}
+	//kcp.DeepCopyInto(kcpNew)
 
 
 	// internalRegistryHostnamePath := []string{"imagePolicyConfig", "internalRegistryHostname"}
@@ -150,11 +150,30 @@ func (r *ReconcileImage) Reconcile(request reconcile.Request) (reconcile.Result,
 	//allowed := configImage.Spec.AllowedRegistriesForImport
 	// kcpNew.ImagePolicyConfig.AllowedRegistriesForImport = allowed
 
-	fmt.Println("kcp: ", kcp)
-	fmt.Println("kcpNew: ", kcpNew)
-	fmt.Println("updated kcp:", reflect.DeepEqual(kcpNew, kcp))
+
+	if !reflect.DeepEqual(*kcpNew, kcp) || true {
+		kcpNewSecret := kcpSecret.DeepCopy()
+		err = r.updateKCPSecret(kcpNew, kcpNewSecret)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+	}
 
 	return reconcile.Result{}, nil
+}
+
+func (r *ReconcileImage) updateKCPSecret(kcpNew *kubecontrolplanev1.KubeAPIServerConfig, kcpNewSecret *corev1.Secret) error {
+	data, err := yaml.Marshal(*kcpNew)
+	if err != nil {
+		return err
+	}
+	kcpNewSecret.Data["kubecontrolplane"] = data
+	fmt.Println("updating secret")
+	if err := r.client.Update(context.Background(), kcpNewSecret); err != nil {
+		fmt.Println("error updating secret")
+		return err
+	}
+	return nil
 }
 
 func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontrolplanev1.KubeAPIServerConfig, error) {
@@ -164,7 +183,6 @@ func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontr
 	if !ok {
 		return decoded, fmt.Errorf("missing key value in secret data")
 	}
-
 
 	if _, _, err := r.deserializer.Decode(encoded, nil, &decoded); err != nil {
 		fmt.Println("error decoding")
