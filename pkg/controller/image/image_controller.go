@@ -1,13 +1,13 @@
 package image
 
 import (
+	"bytes"
 	"context"
-	//"encoding/json"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"github.com/ghodss/yaml"
-	//"github.com/michaelgugino/htk-cluster-config-operator/pkg/controller"
-	//"github.com/michaelgugino/htk-cluster-config-operator/pkg/util"
+
 	configv1 "github.com/openshift/api/config/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -26,6 +26,7 @@ import (
 	//"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	kubecontrolplanev1 "github.com/openshift/api/kubecontrolplane/v1"
+	openshiftcontrolplanev1 "github.com/openshift/api/openshiftcontrolplane/v1"
 )
 
 var log = logf.Log.WithName("controller_image")
@@ -46,7 +47,8 @@ func newReconciler(mgr manager.Manager, mgmtClient client.Client, mgmtNamespace 
 		scheme: scheme,
 		mgmtClient: mgmtClient,
 		mgmtNamespace: mgmtNamespace,
-		deserializer: codecs.UniversalDecoder(kubecontrolplanev1.SchemeGroupVersion),
+		kdeserializer: codecs.UniversalDecoder(kubecontrolplanev1.SchemeGroupVersion),
+		odeserializer: codecs.UniversalDecoder(openshiftcontrolplanev1.SchemeGroupVersion),
 	}
 }
 
@@ -90,7 +92,8 @@ type ReconcileImage struct {
 	mgmtClient client.Client
 	// Namespace on the management cluster to look for objects
 	mgmtNamespace string
-	deserializer runtime.Decoder
+	kdeserializer runtime.Decoder
+	odeserializer runtime.Decoder
 }
 
 // Reconcile reads that state of the cluster for a Image object and makes changes based on the state read
@@ -136,24 +139,50 @@ func (r *ReconcileImage) Reconcile(request reconcile.Request) (reconcile.Result,
 	//kcp.DeepCopyInto(kcpNew)
 
 
+	oapiSecret := corev1.Secret{}
+	secretKey = client.ObjectKey{
+		Namespace: r.mgmtNamespace,
+		Name:      "hosted-openshift-apiserver",
+	}
+
+	if err := r.mgmtClient.Get(context.TODO(), secretKey, &oapiSecret); err != nil {
+		// Error reading the object - requeue the request.
+		return reconcile.Result{}, err
+	}
+
+	oapiCP, err := r.oapiConfigFromSecret(oapiSecret)
+	oapiCPNew := oapiCP.DeepCopy()
+
 	// internalRegistryHostnamePath := []string{"imagePolicyConfig", "internalRegistryHostname"}
 	internalRegistryHostName := configImage.Status.InternalRegistryHostname
 	// This should probably never be zero-length.
 	if len(internalRegistryHostName) > 0 {
 		kcpNew.ImagePolicyConfig.InternalRegistryHostname = internalRegistryHostName
+		oapiCPNew.ImagePolicyConfig.InternalRegistryHostname = internalRegistryHostName
 	}
 	externalRegistryHostnames := configImage.Spec.ExternalRegistryHostnames
 	externalRegistryHostnames = append(externalRegistryHostnames, configImage.Status.ExternalRegistryHostnames...)
 
 	kcpNew.ImagePolicyConfig.ExternalRegistryHostnames = externalRegistryHostnames
+	oapiCPNew.ImagePolicyConfig.ExternalRegistryHostnames = externalRegistryHostnames
 
-	//allowed := configImage.Spec.AllowedRegistriesForImport
-	// kcpNew.ImagePolicyConfig.AllowedRegistriesForImport = allowed
-
+	allowed := configImage.Spec.AllowedRegistriesForImport
+	oapiCPNew.ImagePolicyConfig.AllowedRegistriesForImport, err = Convert(allowed)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
 	if !reflect.DeepEqual(*kcpNew, kcp) || true {
 		kcpNewSecret := kcpSecret.DeepCopy()
 		err = r.updateKCPSecret(kcpNew, kcpNewSecret)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+
+	if !reflect.DeepEqual(*oapiCPNew, oapiCP) || true {
+		oapiNewSecret := oapiSecret.DeepCopy()
+		err = r.updateOAPISecret(oapiCPNew, oapiNewSecret)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -176,6 +205,20 @@ func (r *ReconcileImage) updateKCPSecret(kcpNew *kubecontrolplanev1.KubeAPIServe
 	return nil
 }
 
+func (r *ReconcileImage) updateOAPISecret(oapiCPNew *openshiftcontrolplanev1.OpenShiftAPIServerConfig, oapiNewSecret *corev1.Secret) error {
+	data, err := yaml.Marshal(*oapiCPNew)
+	if err != nil {
+		return err
+	}
+	oapiNewSecret.Data["config.yaml"] = data
+	fmt.Println("updating secret")
+	if err := r.client.Update(context.Background(), oapiNewSecret); err != nil {
+		fmt.Println("error updating secret")
+		return err
+	}
+	return nil
+}
+
 func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontrolplanev1.KubeAPIServerConfig, error) {
 	decoded := kubecontrolplanev1.KubeAPIServerConfig{}
 
@@ -184,7 +227,7 @@ func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontr
 		return decoded, fmt.Errorf("missing key value in secret data")
 	}
 
-	if _, _, err := r.deserializer.Decode(encoded, nil, &decoded); err != nil {
+	if _, _, err := r.kdeserializer.Decode(encoded, nil, &decoded); err != nil {
 		fmt.Println("error decoding")
 		return decoded, err
 	}
@@ -209,4 +252,36 @@ func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontr
     }
 	*/
 	return decoded, nil
+}
+
+func (r *ReconcileImage) oapiConfigFromSecret(secret corev1.Secret) (openshiftcontrolplanev1.OpenShiftAPIServerConfig, error) {
+	decoded := openshiftcontrolplanev1.OpenShiftAPIServerConfig{}
+
+	encoded, ok := secret.Data["config.yaml"]
+	if !ok {
+		return decoded, fmt.Errorf("missing key config.yaml in secret data")
+	}
+
+	if _, _, err := r.odeserializer.Decode(encoded, nil, &decoded); err != nil {
+		fmt.Println("error decoding")
+		return decoded, err
+	}
+	return decoded, nil
+}
+
+func Convert(o interface{}) (openshiftcontrolplanev1.AllowedRegistries, error) {
+	if o == nil {
+		return nil, nil
+	}
+	buf := &bytes.Buffer{}
+	if err := json.NewEncoder(buf).Encode(o); err != nil {
+		return nil, err
+	}
+
+	ret := openshiftcontrolplanev1.AllowedRegistries{}
+	if err := json.NewDecoder(buf).Decode(&ret); err != nil {
+		return nil, err
+	}
+
+	return ret, nil
 }
