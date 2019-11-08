@@ -27,6 +27,8 @@ import (
 
 	kubecontrolplanev1 "github.com/openshift/api/kubecontrolplane/v1"
 	openshiftcontrolplanev1 "github.com/openshift/api/openshiftcontrolplane/v1"
+
+	"github.com/michaelgugino/htk-cluster-config-operator/pkg/util"
 )
 
 var log = logf.Log.WithName("controller_image")
@@ -62,16 +64,6 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 
 	// Watch for changes to primary resource Image
 	err = c.Watch(&source.Kind{Type: &configv1.Image{}}, &handler.EnqueueRequestForObject{})
-	if err != nil {
-		return err
-	}
-
-	// TODO(user): Modify this to be the types you create that are owned by the primary resource
-	// Watch for changes to secondary resource Pods and requeue the owner Image
-	err = c.Watch(&source.Kind{Type: &corev1.Pod{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &configv1.Image{},
-	})
 	if err != nil {
 		return err
 	}
@@ -124,7 +116,7 @@ func (r *ReconcileImage) Reconcile(request reconcile.Request) (reconcile.Result,
 	kcpSecret := corev1.Secret{}
 	secretKey := client.ObjectKey{
 		Namespace: r.mgmtNamespace,
-		Name:      "hosted-kubecontrolplane",
+		Name:      util.KcpSecretName,
 	}
 
 	if err := r.mgmtClient.Get(context.TODO(), secretKey, &kcpSecret); err != nil {
@@ -142,7 +134,7 @@ func (r *ReconcileImage) Reconcile(request reconcile.Request) (reconcile.Result,
 	oapiSecret := corev1.Secret{}
 	secretKey = client.ObjectKey{
 		Namespace: r.mgmtNamespace,
-		Name:      "hosted-openshift-apiserver",
+		Name:      util.OapiSecretName,
 	}
 
 	if err := r.mgmtClient.Get(context.TODO(), secretKey, &oapiSecret); err != nil {
@@ -172,7 +164,7 @@ func (r *ReconcileImage) Reconcile(request reconcile.Request) (reconcile.Result,
 		return reconcile.Result{}, err
 	}
 
-	if !reflect.DeepEqual(*kcpNew, kcp) || true {
+	if !reflect.DeepEqual(*kcpNew, kcp) {
 		kcpNewSecret := kcpSecret.DeepCopy()
 		err = r.updateKCPSecret(kcpNew, kcpNewSecret)
 		if err != nil {
@@ -180,7 +172,7 @@ func (r *ReconcileImage) Reconcile(request reconcile.Request) (reconcile.Result,
 		}
 	}
 
-	if !reflect.DeepEqual(*oapiCPNew, oapiCP) || true {
+	if !reflect.DeepEqual(*oapiCPNew, oapiCP) {
 		oapiNewSecret := oapiSecret.DeepCopy()
 		err = r.updateOAPISecret(oapiCPNew, oapiNewSecret)
 		if err != nil {
@@ -222,7 +214,7 @@ func (r *ReconcileImage) updateOAPISecret(oapiCPNew *openshiftcontrolplanev1.Ope
 func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontrolplanev1.KubeAPIServerConfig, error) {
 	decoded := kubecontrolplanev1.KubeAPIServerConfig{}
 
-	encoded, ok := secret.Data["kubecontrolplane"]
+	encoded, ok := secret.Data[util.KcpSecretDataField]
 	if !ok {
 		return decoded, fmt.Errorf("missing key value in secret data")
 	}
@@ -232,6 +224,7 @@ func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontr
 		return decoded, err
 	}
 
+	// We can probably use the code below to improve code reuse.
 	/*
 	configJson, err := yaml.YAMLToJSON(encoded)
 	if err != nil {
@@ -257,7 +250,7 @@ func (r *ReconcileImage) kubeCPconfigFromSecret(secret corev1.Secret) (kubecontr
 func (r *ReconcileImage) oapiConfigFromSecret(secret corev1.Secret) (openshiftcontrolplanev1.OpenShiftAPIServerConfig, error) {
 	decoded := openshiftcontrolplanev1.OpenShiftAPIServerConfig{}
 
-	encoded, ok := secret.Data["config.yaml"]
+	encoded, ok := secret.Data[util.OapiSecretDataField]
 	if !ok {
 		return decoded, fmt.Errorf("missing key config.yaml in secret data")
 	}

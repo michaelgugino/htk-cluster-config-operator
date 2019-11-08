@@ -98,7 +98,7 @@ func main() {
 
 	ctx := context.TODO()
 	// Become the leader before proceeding
-	err = leader.Become(ctx, "htk-cluster-config-operator-lock")
+	err = leader.Become(ctx, "htk-cluster-config-operator-images-lock")
 	if err != nil {
 		log.Error(err, "")
 		os.Exit(1)
@@ -112,7 +112,7 @@ func main() {
 	}
 	// Create a new Cmd to provide shared dependencies and start components
 	mgr, err := manager.New(remoteCfg, manager.Options{
-		Namespace:          namespace,
+		Namespace:          "",
 		MapperProvider:     restmapper.NewDynamicRESTMapper,
 		// MetricsBindAddress: fmt.Sprintf("%s:%d", metricsHost, metricsPort),
 	})
